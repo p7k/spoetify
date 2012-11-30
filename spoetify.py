@@ -32,11 +32,11 @@ def build_graph(words):
     Nodes are indices of super string array (implicit).
     Edges are substring matches (explicit).
     Generator function given ex. ['do', 're', 'mi', 'fa', 'sol'], produces the
-    following:  do
-                do re               re
-                do re mi            re mi           mi
-                do re mi fa         re mi fa        mi fa       fa
-                do re mi fa sol     re mi fa sol    mi fa sol   fa sol  sol
+    following:  do                  re              mi          fa      sol
+                do re               re mi           mi fa       fa sol
+                do re mi            re mi fa        mi fa sol
+                do re mi fa         re mi fa sol
+                do re mi fa sol
     """
     graph = DiGraph()
     n = len(words)
