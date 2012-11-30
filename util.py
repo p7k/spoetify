@@ -1,5 +1,9 @@
 from itertools import izip, tee
+import re
+import string
 
+punctuation_sans_apostrophe = re.compile('[{!s}]'.format(
+    re.escape(string.punctuation.replace("'",""))))
 
 def pairwise(iterable):
     """s -> (s0,s1), (s1,s2), (s2, s3), ..."""
@@ -8,7 +12,7 @@ def pairwise(iterable):
     return izip(a, b)
 
 def process_text(text):
-    return text.strip()
+    return punctuation_sans_apostrophe.sub(' ', text.strip())
 
 def term_conditioner(term):
     return term.lower()
