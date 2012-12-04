@@ -1,6 +1,9 @@
+import gevent
+from gevent import monkey; monkey.patch_socket()
 from networkx import DiGraph, shortest_path
 from spotimeta import search_track
 from util import pairwise, process_text, term_conditioner
+from itertools import izip_longest
 
 
 CACHE = {}
@@ -9,7 +12,16 @@ CACHE = {}
 # TODO cache only useful stuff | if the track name is a substring of a poem
 # TODO there could be multiple title matches - perhaps, should
 # make them all available - maybe even tweak by popularity or genre
-def query(term):
+
+from gevent.queue import Queue
+
+throttle = Queue(1)
+throttle.put(1)
+def query(term, s):
+    throttle.get()
+    gevent.sleep(1/10.)
+    throttle.put(1)
+
     term = term_conditioner(term)
     has_results = False
     if not CACHE.has_key(term):
@@ -23,8 +35,12 @@ def query(term):
     # else:
         # print 'cache hit'
     exact_match = CACHE.get(term)
-    return has_results, exact_match
+    return has_results, exact_match, s
 
+
+def slicer(iterable, start):
+    for stop in range(start, len(iterable)):
+        yield slice(start, stop + 1)
 
 # TODO parallelize querying by word and it's right-side neighbors | gevent
 def build_graph(words):
@@ -39,18 +55,21 @@ def build_graph(words):
                 do re mi fa sol
     """
     graph = DiGraph()
-    n = len(words)
-    for start in range(n):
-        for stop in range(start + 1, n):
-            chunk = words[start:stop + 1]
-            term = ' '.join(chunk)
-            has_results, exact_match = query(term)
-            if not (has_results or exact_match):
-                break
-            elif exact_match:
-                graph.add_edge(start, stop + 1, track=exact_match)
+    slicers = [slicer(words, i) for i in range(len(words))]
+    rounds = izip_longest(*slicers)
+    for r in rounds:
+        queries = []
+        for s in r:
+            if not s is None:
+                term = (' '.join(words[s]))
+                queries.append(gevent.spawn(query, term, s))
+        gevent.joinall(queries)
+        values = (query.value for query in queries)
+        for has_results, exact_match, s in values:
+            if exact_match:
+                graph.add_edge(s.start, s.stop, track=exact_match)
+    print graph.edges()
     return graph
-
 
 # TODO better exception handling
 # TODO logging
