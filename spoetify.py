@@ -2,7 +2,7 @@ import gevent
 from gevent import monkey; monkey.patch_socket()
 from networkx import DiGraph, shortest_path
 from spotimeta import search_track
-from util import pairwise, process_text, term_conditioner
+from util import pairwise, process_text, term_conditioner, throttle
 from itertools import izip_longest
 
 
@@ -12,16 +12,8 @@ CACHE = {}
 # TODO cache only useful stuff | if the track name is a substring of a poem
 # TODO there could be multiple title matches - perhaps, should
 # make them all available - maybe even tweak by popularity or genre
-
-from gevent.queue import Queue
-
-throttle = Queue(1)
-throttle.put(1)
+@throttle(1/10.)
 def query(term, s):
-    throttle.get()
-    gevent.sleep(1/10.)
-    throttle.put(1)
-
     term = term_conditioner(term)
     has_results = False
     if not CACHE.has_key(term):
@@ -68,7 +60,6 @@ def build_graph(words):
         for has_results, exact_match, s in values:
             if exact_match:
                 graph.add_edge(s.start, s.stop, track=exact_match)
-    print graph.edges()
     return graph
 
 # TODO better exception handling
