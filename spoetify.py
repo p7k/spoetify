@@ -1,32 +1,55 @@
-from gevent import spawn, joinall
+import gevent
 from gevent import monkey; monkey.patch_socket()
+from gevent.queue import Queue
 from networkx import DiGraph, shortest_path
-from spotimeta import search_track
-from util import pairwise, process_text, term_conditioner, throttle
-from functools import partial
+from util import pairwise, process_text, term_conditioner
+import requests
+import requests_cache
 
 
-CACHE = {}
+# request-level cache using HTTP Cache Control
+requests_cache.configure('spotify_cache')
+# term-level cache
+_Q_CACHE = {}
 
-# TODO proper caching and invalidation based on response headers
-# TODO cache by term also - repeating substrings
+def search_track_url(q, page):
+    params = dict(q=q.encode('UTF-8'), page=page)
+    return requests.Request("http://ws.spotify.com/search/1/track.json",
+            params=params).full_url
+
+
+def throttler(interval):
+    throttle_queue = Queue(maxsize=1)
+    throttle_queue.put(1)
+    def _throttle():
+        throttle_queue.get()
+        gevent.sleep(interval)
+        throttle_queue.put(1)
+    return _throttle
+
+# Spotify MetaAPI dictates max rate of 10 requests per second
+_throttle = throttler(1./10)
+
+# TODO timeout and exception handling
 # TODO cache only useful stuff | if the track name is a substring of a poem
 # TODO there could be multiple title matches - perhaps, should
 # make them all available - maybe even tweak by popularity or genre
-@throttle(1./10)
-def query(term):
-    term = term_conditioner(term)
-    has_results = False
-    if not CACHE.has_key(term):
-        response = search_track(term)
-        result = response['result']
-        if result:
-            has_results = True
-            for track in result:
-                name = track['name'].lower()
-                CACHE[name] = track
-    exact_match = CACHE.get(term)
-    return has_results, exact_match
+def search_track(q, page=1):
+    q = term_conditioner(q)
+    has_tracks = False
+    if not _Q_CACHE.has_key(q):
+        url = search_track_url(q, page)
+        # decide if we need throttle depending on HTTP Cache vs API
+        if not requests_cache.has_url(url):
+            _throttle()
+        response = requests.get(url).json
+        tracks = response['tracks']
+        has_tracks = bool(tracks)
+        for track in tracks:
+            name = track['name'].lower()
+            _Q_CACHE[name] = track
+    exact_match = _Q_CACHE.get(q)
+    return has_tracks, exact_match
 
 
 def slicer(sequence, start):
@@ -37,15 +60,15 @@ def slicer(sequence, start):
         yield slice(start, stop + 1)
 
 
-def fetcher(graph, words, n):
+def _search_boss(graph, words, n):
     """Fetch results for incremental slices and decide whether or not to
     continue.  If a smaller slice from a particular position can't be found,
     there's no sense in trying larger slices.
     If there's an exact match for the substring, an edge is added to the graph.
     """
     for s in slicer(words, n):
-        term = ' '.join(words[s])
-        g = spawn(query, term)
+        q = ' '.join(words[s])
+        g = gevent.spawn(search_track, q)
         g.join()
         has_results, exact_match = g.value
         if not (has_results or exact_match):
@@ -54,7 +77,7 @@ def fetcher(graph, words, n):
             graph.add_edge(s.start, s.stop, track=exact_match)
 
 
-def build_graph(words):
+def _build_graph(words):
     """Returns a graph of substrings.
     Nodes are indices of super string array (implicit).
     Edges are substring matches (explicit).
@@ -67,13 +90,13 @@ def build_graph(words):
                 do re mi fa sol
     """
     graph = DiGraph()
-    joinall([spawn(fetcher, graph, words, n) for n in range(len(words))])
+    gevent.joinall([gevent.spawn(_search_boss, graph, words, n) for n in range(len(words))])
     return graph
 
 
 # TODO better exception handling
 # TODO logging
-def build_playlist(graph, words):
+def _build_playlist(graph, words):
     playlist = []
     if len(graph) > 0:
         try:
@@ -82,13 +105,13 @@ def build_playlist(graph, words):
             raise SystemExit
         for start, stop in pairwise(path):
             track = graph.edge[start][stop]['track']
-            playlist.append((track['name'], track['artist']['name'],
+            playlist.append((track['name'], track['artists'][0]['name'],
                 track['href']))
     return playlist
 
 
 # TODO turn this thing into a webapp :)
-def print_playlist(playlist):
+def _print_playlist(playlist):
     for track in playlist:
         print "{!s:<20} by {!s:<30} {!s:<30}".format(*track)
 
@@ -96,11 +119,11 @@ def print_playlist(playlist):
 # TODO improve text conditioning
 def spoetify(text):
     words = input_string.split()
-    graph = build_graph(words)
-    playlist = build_playlist(graph, words)
+    graph = _build_graph(words)
+    playlist = _build_playlist(graph, words)
     if not playlist:
         raise SystemExit
-    print_playlist(playlist)
+    _print_playlist(playlist)
 
 
 if __name__ == '__main__':
