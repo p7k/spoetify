@@ -2,7 +2,7 @@ import gevent
 from gevent import monkey; monkey.patch_socket()
 from gevent.queue import Queue
 from networkx import DiGraph, shortest_path
-from util import pairwise, process_text, term_conditioner
+from util import pairwise, process_text, term_conditioner, gevent_throttle
 import requests
 import requests_cache
 
@@ -18,17 +18,8 @@ def search_track_url(q, page):
             params=params).full_url
 
 
-def throttler(interval):
-    throttle_queue = Queue(maxsize=1)
-    throttle_queue.put(1)
-    def _throttle():
-        throttle_queue.get()
-        gevent.sleep(interval)
-        throttle_queue.put(1)
-    return _throttle
-
 # Spotify MetaAPI dictates max rate of 10 requests per second
-_throttle = throttler(1./10)
+throttle = gevent_throttle(10)(lambda:None)
 
 # TODO timeout and exception handling
 # TODO cache only useful stuff | if the track name is a substring of a poem
@@ -41,7 +32,7 @@ def search_track(q, page=1):
         url = search_track_url(q, page)
         # decide if we need throttle depending on HTTP Cache vs API
         if not requests_cache.has_url(url):
-            _throttle()
+            throttle()
         response = requests.get(url).json
         tracks = response['tracks']
         has_tracks = bool(tracks)

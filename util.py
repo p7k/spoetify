@@ -3,6 +3,7 @@ import re
 import string
 import gevent
 from gevent.queue import Queue
+from timeit import default_timer
 
 def pairwise(iterable):
     """s -> (s0,s1), (s1,s2), (s2, s3), ..."""
@@ -10,22 +11,22 @@ def pairwise(iterable):
     next(b, None)
     return izip(a, b)
 
-def throttle(interval):
-    """Decorates a Greenlet function for throttling.
-
-    Args:
-        interval: time in seconds (or fractions thereof) to idle.
-    """
-    tq = Queue(1)
-    tq.put(1)
-    def _throttle(func):
-        def wrapper(*args, **kwargs):
-            tq.get()
-            gevent.sleep(interval)
-            tq.put(1)
+def gevent_throttle(calls_per_sec=0):
+    """Decorates a Greenlet function for throttling."""
+    interval = 1. / calls_per_sec if calls_per_sec else 0
+    def decorate(func):
+        tq = Queue(1)
+        tq.put(0.)
+        def throttled_func(*args, **kwargs):
+            if calls_per_sec:
+                last, current = tq.get(), default_timer()
+                elapsed = current - last
+                if elapsed < interval:
+                    gevent.sleep(interval - elapsed)
+                tq.put(default_timer())
             return func(*args, **kwargs)
-        return wrapper
-    return _throttle
+        return throttled_func
+    return decorate
 
 punctuation_sans_apostrophe = re.compile('[{!s}]'.format(
     re.escape(string.punctuation.replace("'",""))))
